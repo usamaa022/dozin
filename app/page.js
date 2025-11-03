@@ -126,11 +126,11 @@ export default function Home() {
   const validateForm = () => {
     const newErrors = {};
     if (!formData.category) newErrors.category = "جۆری شتەکە پێویستە";
-    if (!formData.city) newErrors.city = "شار پێویستە";
+    if (!formData.city) newErrors.city = "ئەو ناوچەیەی تیایدا دۆزیتەوە";
     if (!formData.description || formData.description.length < 10)
-      newErrors.description = "وەسف پێویستە (کەمەیەک ۱۰ پیت بێت)";
+      newErrors.description = "زانیاری زیاتر (نموونە: لە بەردەم نەخۆشخانەی شار بڕە پارەیەکم دۆزیەوە)";
     if (!formData.phone || formData.phone.length < 10)
-      newErrors.phone = "ژمارەی تەلەفۆن پێویستە";
+      newErrors.phone = "ژمارەی تەلەفۆنی خۆت پێویستە";
     if (!formData.date) newErrors.date = "بەرواری دۆزینەوە پێویستە";
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -282,18 +282,18 @@ export default function Home() {
                 onSubmit={handleSubmit}
                 className="space-y-4"
               >
-                {/* Category Dropdown */}
+               {/* Category Dropdown */}
                 <div>
                   {errors.category && <p className="text-red-500 text-sm mb-1">{errors.category}</p>}
                   <select
                     name="category"
                     value={formData.category}
                     onChange={handleInputChange}
-                    className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.category ? "border-red-500" : "border-gray-300"}`}
+                    className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.category ? "border-red-500" : "border-gray-300"} text-gray-900`}
                   >
-                    <option value="" className="text-gray-500">جۆری شتەکە دیاری بکە</option>
+                    <option value="" className="text-gray-900">جۆری شتەکە دیاری بکە</option>
                     {categories.map((cat) => (
-                      <option key={cat.value} value={cat.value} className="text-gray-800">
+                      <option key={cat.value} value={cat.value} className="text-gray-900">
                         {cat.label}
                       </option>
                     ))}
@@ -307,11 +307,11 @@ export default function Home() {
                     name="city"
                     value={formData.city}
                     onChange={handleInputChange}
-                    className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.city ? "border-red-500" : "border-gray-300"}`}
+                    className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.city ? "border-red-500" : "border-gray-300"} text-gray-900`}
                   >
-                    <option value="" className="text-gray-500">شار دیاری بکە</option>
+                    <option value="" className="text-gray-900">شار دیاری بکە</option>
                     {cities.map((city) => (
-                      <option key={city} value={city} className="text-gray-800">
+                      <option key={city} value={city} className="text-gray-900">
                         {city}
                       </option>
                     ))}
@@ -326,9 +326,10 @@ export default function Home() {
                     name="date"
                     value={formData.date}
                     onChange={handleInputChange}
-                    className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.date ? "border-red-500" : "border-gray-300"}`}
+                    className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.date ? "border-red-500" : "border-gray-300"} text-gray-900`}
                   />
                 </div>
+
 
                 {/* Name Input */}
                 <input
@@ -336,7 +337,7 @@ export default function Home() {
                   name="name"
                   value={formData.name}
                   onChange={handleInputChange}
-                  placeholder="ناوی لەسەر شتەک (ئەگەر هەیە)"
+                  placeholder="ناوێک یان زانیاریەک لەسەر دۆزراوەکە هەیە بینوسە"
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-800 placeholder-gray-500"
                 />
 
@@ -347,7 +348,7 @@ export default function Home() {
                     name="description"
                     value={formData.description}
                     onChange={handleInputChange}
-                    placeholder="وەسفێک بەخێراوە (مێسۆڵە: لە بەردەم نەخۆشخانەی شار دۆزیمەوە)"
+                    placeholder="زانیاری زیاتر (نموونە: لە بەردەم نەخۆشخانەی شار بڕە پارەیەکم دۆزیەوە)"
                     className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.description ? "border-red-500" : "border-gray-300"} text-gray-800 placeholder-gray-500`}
                     rows="3"
                   />
