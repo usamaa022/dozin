@@ -1,110 +1,298 @@
-import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { NextResponse } from "next/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+const categories = [
+  { value: "money", label: "پارە", emoji: "💵" },
+  { value: "national-id", label: "کارتی نیشتیمانی", emoji: "🪪" },
+  { value: "passport", label: "پاسپۆرت", emoji: "📘" },
+  { value: "car-license", label: "مۆڵەتی شۆفێری", emoji: "🚗" },
+  { value: "car-plate", label: "سەنەوی سەیارە", emoji: "🔢" },
+  { value: "keys", label: "کەل و پەل", emoji: "🔑" },
+  { value: "mobile", label: "مۆبایل", emoji: "📱" },
+  { value: "bag", label: "جانتا", emoji: "👜" },
+  { value: "wallet", label: "جزدان", emoji: "👛" },
+  { value: "jewelry", label: "زێڕ و زیو", emoji: "💍" },
+  { value: "watch", label: "کاتژمێر", emoji: "⌚" },
+  { value: "document", label: "بەڵگەنامە", emoji: "📄" },
+  { value: "laptop", label: "لاپتۆپ", emoji: "💻" },
+  { value: "animal", label: "ئاژەڵ", emoji: "🐾" },
+  { value: "other", label: "هی تر", emoji: "📦" },
+];
+
+const categoryMap = Object.fromEntries(
+  categories.map((c) => [c.value, c])
+);
+
+function normalize(text) {
+  if (!text) return "";
+
+  return String(text)
+    .toLowerCase()
+    .replace(/[أإآا]/g, "ا")
+    .replace(/[ەة]/g, "ه")
+    .replace(/[ێ]/g, "ی")
+    .replace(/[يى]/g, "ی")
+    .replace(/[ك]/g, "ک")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getIntent(query) {
+  const q = normalize(query);
+
+  const intents = {
+    passport: [
+      "پاسپۆرت",
+      "passport",
+      "جواز"
+    ],
+
+    nationalId: [
+      "کارتی نیشتیمانی",
+      "ناسنامە",
+      "تەسکەرە",
+      "id",
+      "card"
+    ],
+
+    license: [
+      "مۆڵەتی شۆفێری",
+      "license"
+    ],
+
+    keys: [
+      "کلیل",
+      "کەل و پەل",
+      "keys"
+    ],
+
+    mobile: [
+      "مۆبایل",
+      "phone",
+      "iphone",
+      "سامسۆنگ"
+    ],
+
+    bag: [
+      "جانتا",
+      "bag"
+    ]
+  };
+
+  for (const [key, words] of Object.entries(intents)) {
+    if (words.some((w) => q.includes(normalize(w)))) {
+      return key;
+    }
+  }
+
+  return null;
+}
+
+function isStrictCategoryMatch(intent, item) {
+  const cat = item.category;
+
+  switch (intent) {
+    case "passport":
+      return cat === "passport";
+
+    case "nationalId":
+      return cat === "national-id";
+
+    case "license":
+      return cat === "car-license";
+
+    case "keys":
+      return cat === "keys";
+
+    case "mobile":
+      return cat === "mobile";
+
+    case "bag":
+      return cat === "bag";
+
+    default:
+      return true;
+  }
+}
+
+function calculateScore(query, item) {
+  const q = normalize(query);
+
+  const fields = [
+    item.name,
+    item.description,
+    item.city,
+    item.phone,
+    item.category
+  ]
+    .filter(Boolean)
+    .map(normalize);
+
+  let score = 0;
+
+  fields.forEach((field) => {
+    if (field.includes(q)) {
+      score += 10;
+    }
+
+    const words = q.split(" ");
+
+    words.forEach((word) => {
+      if (field.includes(word)) {
+        score += 3;
+      }
+    });
+  });
+
+  return score;
+}
 
 export async function POST(request) {
   try {
-    const { prompt, items } = await request.json();
+    const { prompt, items = [] } = await request.json();
 
-    const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
-    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    const query = normalize(prompt);
 
-    // Debug logs
-    console.log("=== DOZIN DEBUG START ===");
-    console.log("1. Environment Keys Loaded:", {
-      MISTRAL: MISTRAL_API_KEY ? "✅ LOADED" : "❌ MISSING",
-      GEMINI: GEMINI_API_KEY ? "✅ LOADED" : "❌ MISSING"
-    });
-    console.log("2. Prompt Received:", prompt);
-    console.log("3. Items Received From Frontend (Firebase):", items ? items.length : 0, "items");
-    console.log("=== DOZIN DEBUG END ===");
+    const intent = getIntent(query);
 
-    // Validate API keys
-    if (!MISTRAL_API_KEY || !GEMINI_API_KEY) {
-      return NextResponse.json(
-        { error: "API keys not configured in .env.local" },
-        { status: 500 }
+    let filteredItems = [];
+
+    // STRICT FILTERING
+    filteredItems = items.filter((item) => {
+      if (!isStrictCategoryMatch(intent, item)) {
+        return false;
+      }
+
+      const content = normalize(`
+        ${item.name || ""}
+        ${item.description || ""}
+        ${item.city || ""}
+        ${item.phone || ""}
+      `);
+
+      return (
+        content.includes(query) ||
+        query.split(" ").some((w) => content.includes(w))
       );
-    }
-
-    // Format items for Mistral's context
-    const context = !items || items.length === 0
-      ? "هیچ شتێکی تۆمارکراو نییە لە ئێستادا."
-      : items.map((it, i) => {
-          const cat = it.category || "هی تر";
-          return [
-            `#${i + 1}`,
-            `جۆر: ${cat}`,
-            `شار: ${it.city || "نەدیار"}`,
-            `بەروار: ${it.date || "نەدیار"}`,
-            `وەسف: ${it.description || "—"}`,
-            it.name ? `ناو: ${it.name}` : null,
-            `تەلەفۆن: ${it.phone || "نەدیار"}`,
-          ].filter(Boolean).join(" | ");
-        }).join("\n");
-
-    // Call Mistral AI
-    const mistralResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${MISTRAL_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "mistral-small",
-        messages: [
-          {
-            role: "system",
-            content: `تۆ یارمەتیدەری زیرەکی ئەپی "دۆزین" یت.
-- هەمیشە بە کوردیی سۆرانی وەڵام بدەرەوە.
-- ئەگەر بەکارهێنەر لەبارەی شتێکی ونبوو پرسی، لە لیستەکەدا بگەڕێ و شتە هاوشێوەکان پیشان بدە.
-- ژمارەی تەلەفۆن و شاری هەر شتێکی دۆزراوە پیشان بدە.
-- وەڵامەکەت بەسوود و ڕوون بێت.
-- تەنها شتەکان پێداکراو پیشان بدە، هەر چەندەک وەک پێیامەک بێت.`
-          },
-          {
-            role: "user",
-            content: `لیستی شتە دۆزراوەکان:\n${context}\n\nپرسیاری بەکارهێنەر: ${prompt}`
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 1000,
-      })
     });
 
-    if (!mistralResponse.ok) {
-      throw new Error(`Mistral API returned status: ${mistralResponse.status}`);
+    // SMART SORTING
+    filteredItems = filteredItems
+      .map((item) => ({
+        ...item,
+        score: calculateScore(query, item)
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    // AI explanation
+    let aiText = "";
+
+    if (filteredItems.length > 0) {
+      aiText = `🔍 ${filteredItems.length} شت دۆزرایەوە:\n\n`;
+
+      filteredItems.forEach((item, index) => {
+        const cat = categoryMap[item.category];
+
+        aiText += `
+━━━━━━━━━━━━━━━
+
+${index + 1}. ${cat?.emoji || "📦"} ${cat?.label || "هی تر"}
+
+👤 ناو: ${item.name || "نەدیار"}
+
+📍 شوێن: ${item.city || "نەدیار"}
+
+📅 بەروار: ${item.date || "نەدیار"}
+
+📝 وەسف:
+${item.description || "—"}
+
+📞 تەلەفۆن:
+${item.phone || "نەدیار"}
+`;
+
+        // SHOW ALL IMAGES
+        if (item.images?.length > 0) {
+          aiText += `\n🖼️ وێنەکان:\n`;
+
+          item.images.forEach((img, imgIndex) => {
+            aiText += `${imgIndex + 1}. ${img}\n`;
+          });
+        }
+
+        aiText += `\n`;
+      });
+    } else {
+      aiText = "هیچ شتێک نەدۆزرایەوە.";
     }
 
-    const mistralData = await mistralResponse.json();
-    const aiText = mistralData.choices?.[0]?.message?.content?.trim() || "";
-
-    // Generate image using Google Generative AI (if items are found)
+    // OPTIONAL AI IMAGE
     let imageUrl = null;
-    if (aiText && !aiText.includes("نەدۆزرایەوە") && !aiText.includes("هیچ")) {
+
+    if (process.env.GEMINI_API_KEY && filteredItems.length > 0) {
       try {
-        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const genAI = new GoogleGenerativeAI(
+          process.env.GEMINI_API_KEY
+        );
+
+        const model = genAI.getGenerativeModel({
+          model: "gemini-1.5-flash",
+        });
+
         const result = await model.generateContent([
-          `Generate a simple icon-style image for a lost and found app in Kurdish context. The query was: ${prompt}. The found items are: ${aiText.substring(0, 500)}.`,
-          "Return only the image URL, no text."
+          `Generate one icon URL idea for ${prompt}`
         ]);
-        const response = await result.response;
-        imageUrl = response.text().trim();
-      } catch (imgError) {
-        console.error("Image generation error:", imgError);
+
+        imageUrl = result.response.text();
+      } catch (e) {
+        console.log(e);
       }
     }
 
     return NextResponse.json({
+      success: true,
+
       text: aiText,
-      imageUrl: imageUrl || null
+
+      total: filteredItems.length,
+
+      imageUrl,
+
+      filteredItems: filteredItems.map((item) => ({
+        id: item.id,
+
+        category: item.category,
+
+        categoryInfo: categoryMap[item.category],
+
+        name: item.name,
+
+        description: item.description,
+
+        city: item.city,
+
+        phone: item.phone,
+
+        date: item.date,
+
+        images: item.images || [],
+
+        score: item.score
+      }))
     });
 
   } catch (error) {
-    console.error("AI Route Error Handler caught:", error);
+    console.error(error);
+
     return NextResponse.json(
-      { error: "کێشەیەک ڕویدا دووبارە هەوڵبدە" },
-      { status: 500 }
+      {
+        success: false,
+        text: "هەڵەیەک ڕوویدا",
+        filteredItems: [],
+      },
+      {
+        status: 500,
+      }
     );
   }
 }

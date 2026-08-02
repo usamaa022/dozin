@@ -2,21 +2,23 @@
   "name": "mirat",
   "version": "0.1.0",
   "private": true,
+
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
+  "dev": "next dev",
+  "build": "opennextjs-cloudflare build --dangerouslyUseUnsupportedNextVersion",
+  "start": "next start",
+  "lint": "next lint",
+  "deploy": "opennextjs-cloudflare build --dangerouslyUseUnsupportedNextVersion && opennextjs-cloudflare deploy"
+},
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@tailwindcss/postcss": "^4.3.0",
     "firebase": "^10.14.1",
     "framer-motion": "^11.0.0",
-    "next": "^14.2.0",
+    "next": "^16.2.6",
     "openai": "^6.37.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
     "react-icons": "^5.0.0"
   },
   "devDependencies": {

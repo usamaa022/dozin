@@ -4,10 +4,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   FaPhoneAlt, FaPlus, FaTimes, FaMapMarkerAlt, FaCalendarAlt,
   FaCamera, FaChevronLeft, FaChevronRight, FaMicrophone,
-  FaMicrophoneSlash, FaRobot, FaPaperPlane, FaCheck, FaSearch
+  FaMicrophoneSlash, FaRobot, FaPaperPlane, FaCheck, FaSearch,
+  FaTrash, FaGoogle // Added new icons
 } from "react-icons/fa";
-import { db } from "@/firebase";
-import { collection, addDoc, onSnapshot } from "firebase/firestore";
+import { db, auth } from "@/firebase"; // Added auth
+import { collection, addDoc, onSnapshot, doc, deleteDoc } from "firebase/firestore";
+import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "firebase/auth";
 
 // --- Design Tokens ---
 const colors = {
@@ -155,10 +157,20 @@ function Lightbox({ images, startIndex, onClose }) {
   );
 }
 
-// --- Item Card ---
-function ItemCard({ item, onImageClick }) {
+// --- Item Card (Updated with Delete functionality) ---
+function ItemCard({ item, currentUser, onImageClick }) {
   const cat = categoryMap[item.category] || { label: item.category, emoji: "📦" };
   const imgs = (item.images || []).filter(Boolean);
+
+  const handleDelete = async () => {
+    if (window.confirm("دڵنیایت لە سڕینەوەی ئەم پۆستە؟")) {
+      try {
+        await deleteDoc(doc(db, "items", item.id));
+      } catch (err) {
+        console.error("Error deleting document:", err);
+      }
+    }
+  };
 
   return (
     <motion.div
@@ -166,11 +178,11 @@ function ItemCard({ item, onImageClick }) {
       animate={{ opacity: 1, y: 0 }}
       whileHover={{ y: -5 }}
       transition={{ type: "spring", stiffness: 240, damping: 22 }}
-      className="group bg-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden border border-gray-100"
+      className="group bg-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden border border-gray-100 flex flex-col"
     >
       {imgs.length > 0 ? (
         <div
-          className="relative h-40 md:h-48 overflow-hidden bg-gray-50 cursor-pointer"
+          className="relative h-40 md:h-48 overflow-hidden bg-gray-50 cursor-pointer flex-shrink-0"
           onClick={() => onImageClick(imgs, 0)}
         >
           <img
@@ -194,35 +206,53 @@ function ItemCard({ item, onImageClick }) {
           <span className="absolute top-2 right-2 text-2xl drop-shadow-lg">{cat.emoji}</span>
         </div>
       ) : (
-        <div className="h-20 md:h-24 flex items-center justify-center bg-gradient-to-br from-teal-50 to-cyan-50 text-4xl">
+        <div className="h-20 md:h-24 flex-shrink-0 flex items-center justify-center bg-gradient-to-br from-teal-50 to-cyan-50 text-4xl">
           {cat.emoji}
         </div>
       )}
 
-      <div className="p-4 md:p-5 space-y-2">
-        <span className="inline-block px-2 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
-          {cat.label}
-        </span>
-        {item.name && <p className="font-bold text-base md:text-lg text-gray-900">{item.name}</p>}
-        <p className="text-gray-600 text-xs md:text-sm leading-relaxed line-clamp-2">{item.description}</p>
-        <div className="flex items-center gap-2 md:gap-4 text-xs md:text-sm text-gray-500">
-          <span className="flex items-center gap-1">
-            <FaMapMarkerAlt className="text-teal-500" /> {item.city}
+      <div className="p-4 md:p-5 space-y-2 flex-1 flex flex-col justify-between">
+        <div>
+          <span className="inline-block px-2 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700 mb-1">
+            {cat.label}
           </span>
-          <span className="flex items-center gap-1">
-            <FaCalendarAlt className="text-teal-500" /> {item.date}
-          </span>
+          {item.name && <p className="font-bold text-base md:text-lg text-gray-900">{item.name}</p>}
+          <p className="text-gray-600 text-xs md:text-sm leading-relaxed line-clamp-2 mt-1 mb-2">{item.description}</p>
+          <div className="flex flex-wrap items-center gap-2 md:gap-4 text-xs md:text-sm text-gray-500 mb-3">
+            <span className="flex items-center gap-1">
+              <FaMapMarkerAlt className="text-teal-500" /> {item.city}
+            </span>
+            <span className="flex items-center gap-1">
+              <FaCalendarAlt className="text-teal-500" /> {item.date}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-          <span className="text-xs text-gray-500">{item.phone}</span>
-          <motion.a
-            href={`tel:${item.phone}`}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="flex items-center gap-1.5 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white font-medium py-1.5 px-3 rounded-full transition-all shadow-lg shadow-teal-500/30 text-xs"
-          >
-            <FaPhoneAlt size={12} /> پەیوەندی
-          </motion.a>
+
+        <div className="flex items-center justify-between pt-3 border-t border-gray-100 mt-auto">
+          <span className="text-xs text-gray-500 font-mono">{item.phone}</span>
+          <div className="flex items-center gap-2">
+            {/* Show delete button only if current user owns the post */}
+            {currentUser && currentUser.uid === item.ownerId && (
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={handleDelete}
+                className="flex items-center justify-center bg-red-50 hover:bg-red-100 text-red-500 font-medium h-7 w-7 rounded-full transition-all text-xs"
+                title="سڕینەوە"
+              >
+                <FaTrash size={11} />
+              </motion.button>
+            )}
+            
+            <motion.a
+              href={`tel:${item.phone}`}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              className="flex items-center gap-1.5 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white font-medium py-1.5 px-3 rounded-full transition-all shadow-lg shadow-teal-500/30 text-xs"
+            >
+              <FaPhoneAlt size={12} /> پەیوەندی
+            </motion.a>
+          </div>
         </div>
       </div>
     </motion.div>
@@ -317,7 +347,7 @@ function UploadZone({ images, onAdd, onRemove, onView }) {
   );
 }
 
-// --- Filter Badge (Mobile-Optimized) ---
+// --- Filter Badge ---
 function FilterBadge({ active, onClick, children }) {
   return (
     <button
@@ -334,13 +364,14 @@ function FilterBadge({ active, onClick, children }) {
   );
 }
 
-// --- AI Panel (Mobile-Optimized) ---
+// --- AI Panel ---
 function AIPanel({ items, onClose, onFilterItems }) {
   const [messages, setMessages] = useState([
     {
       role: "ai",
       text: "سڵاو! من یارمەتیدەری زیرەکتم. پرسیارت بکە لەبارەی شتێکی ونبووت — دەتوانم لە لیستی شتە دۆزراوەکاندا بگەڕێم بۆت.",
-      imageUrl: null
+      imageUrl: null,
+      filteredItems: []
     }
   ]);
   const [input, setInput] = useState("");
@@ -354,22 +385,12 @@ function AIPanel({ items, onClose, onFilterItems }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const performLocalSearch = (query) => {
-    const q = query.toLowerCase();
-    return items.filter(item =>
-      item.description.toLowerCase().includes(q) ||
-      item.name?.toLowerCase().includes(q) ||
-      item.city.toLowerCase().includes(q) ||
-      (categoryMap[item.category]?.label.toLowerCase().includes(q))
-    );
-  };
-
   const send = async (text) => {
     const q = (text || input).trim();
     if (!q || loading) return;
 
     setInput("");
-    setMessages((p) => [...p, { role: "user", text: q, imageUrl: null }]);
+    setMessages((p) => [...p, { role: "user", text: q, imageUrl: null, filteredItems: [] }]);
     setLoading(true);
     setError(null);
 
@@ -380,19 +401,17 @@ function AIPanel({ items, onClose, onFilterItems }) {
         body: JSON.stringify({
           prompt: q,
           items: items.map((it) => ({
+            id: it.id,
             category: categoryMap[it.category]?.label || it.category,
             city: it.city,
             date: it.date,
             description: it.description,
             name: it.name,
-            phone: it.phone
+            phone: it.phone,
+            images: it.images
           }))
         })
       });
-
-      if (!response.ok) {
-        throw new Error("API error");
-      }
 
       const data = await response.json();
 
@@ -400,33 +419,34 @@ function AIPanel({ items, onClose, onFilterItems }) {
         throw new Error(data.error);
       }
 
-      if (data.text.includes("نەدۆزرایەوە") || data.text.includes("هیچ") || data.text.includes("نەدۆزرا")) {
+      if (data.text.includes("نەدۆزرایەوە") || data.text.includes("هیچ") || data.filteredItems.length === 0) {
         setMessages((p) => [...p, {
           role: "ai",
-          text: "ببورە نەدۆزرایەوە",
-          imageUrl: null
+          text: data.text,
+          imageUrl: null,
+          filteredItems: []
         }]);
         onFilterItems([]);
-        return;
+      } else {
+        setMessages((p) => [...p, {
+          role: "ai",
+          text: data.text,
+          imageUrl: data.imageUrl,
+          filteredItems: data.filteredItems
+        }]);
+        onFilterItems(data.filteredItems);
       }
-
-      const filteredItems = performLocalSearch(data.text);
-      onFilterItems(filteredItems);
-
-      setMessages((p) => [...p, {
-        role: "ai",
-        text: data.text,
-        imageUrl: data.imageUrl
-      }]);
 
     } catch (err) {
       console.error("AI Error:", err);
       setError("کێشەیەک ڕویدا دووبارە هەوڵبدە");
       setMessages((p) => [...p, {
         role: "ai",
-        text: "کێشەیەک ڕویدا دووبارە هەوڵبدە",
-        imageUrl: null
+        text: "ببورە، کێشەیەک ڕویدا. تکایە دووبارە هەوڵ بدە.",
+        imageUrl: null,
+        filteredItems: []
       }]);
+      onFilterItems([]);
     } finally {
       setLoading(false);
     }
@@ -466,7 +486,7 @@ function AIPanel({ items, onClose, onFilterItems }) {
       className="fixed inset-x-2 bottom-2 z-50 flex flex-col rounded-3xl overflow-hidden bg-white shadow-2xl md:max-w-md md:mx-auto md:bottom-4 md:left-auto md:right-auto"
       style={{ maxHeight: "85vh" }}
     >
-      {/* Header */}
+      {/* AI Panel content remains exactly the same as your code */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-teal-50 to-cyan-50">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-xl bg-teal-100 flex items-center justify-center">
@@ -485,7 +505,6 @@ function AIPanel({ items, onClose, onFilterItems }) {
         </button>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2 bg-white" dir="rtl">
         {messages.map((m, i) => (
           <motion.div
@@ -509,10 +528,26 @@ function AIPanel({ items, onClose, onFilterItems }) {
                     src={m.imageUrl}
                     alt="Generated image"
                     className="w-full max-h-32 object-cover rounded-lg"
-                    onError={(e) => {
-                      e.currentTarget.style.display = "none";
-                    }}
+                    onError={(e) => { e.currentTarget.style.display = "none"; }}
                   />
+                </div>
+              )}
+              {m.filteredItems && m.filteredItems.length > 0 && (
+                <div className="mt-2 p-2 bg-white rounded-lg shadow-sm">
+                  <p className="text-xs font-medium text-teal-600 mb-1">
+                    {m.filteredItems.length} شت دۆزرایەوە:
+                  </p>
+                  <div className="space-y-1">
+                    {m.filteredItems.slice(0, 3).map((item, idx) => (
+                      <div key={idx} className="text-xs p-1 bg-gray-50 rounded">
+                        <p className="font-medium">{item.name || categoryMap[item.category]?.label || 'نەدیار'}</p>
+                        <p className="text-gray-500">{item.city} - {item.phone}</p>
+                      </div>
+                    ))}
+                    {m.filteredItems.length > 3 && (
+                      <p className="text-xs text-gray-500">+{m.filteredItems.length - 3} شتەکەی تر...</p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -527,11 +562,7 @@ function AIPanel({ items, onClose, onFilterItems }) {
                   key={d}
                   className="w-1.5 h-1.5 rounded-full bg-teal-500"
                   animate={{ y: [0, -5, 0] }}
-                  transition={{
-                    repeat: Infinity,
-                    duration: 0.65,
-                    delay: d * 0.15
-                  }}
+                  transition={{ repeat: Infinity, duration: 0.65, delay: d * 0.15 }}
                 />
               ))}
             </div>
@@ -545,11 +576,9 @@ function AIPanel({ items, onClose, onFilterItems }) {
             </div>
           </div>
         )}
-
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
       <div className="px-3 pb-3 pt-2 border-t border-gray-100 bg-white">
         <div className="flex gap-1.5" dir="rtl">
           <input
@@ -568,11 +597,7 @@ function AIPanel({ items, onClose, onFilterItems }) {
                 : "bg-teal-50 text-teal-600 border border-teal-200"
             }`}
           >
-            {listening ? (
-              <FaMicrophoneSlash size={16} />
-            ) : (
-              <FaMicrophone size={16} />
-            )}
+            {listening ? <FaMicrophoneSlash size={16} /> : <FaMicrophone size={16} />}
           </button>
           <button
             onClick={() => send()}
@@ -591,7 +616,7 @@ function AIPanel({ items, onClose, onFilterItems }) {
   );
 }
 
-// --- Post Form (Mobile-Optimized) ---
+// --- Post Form (Updated to attach ownerId) ---
 function PostForm({ onDone, onCancel }) {
   const [formData, setFormData] = useState({
     category: "",
@@ -627,10 +652,14 @@ function PostForm({ onDone, onCancel }) {
 
     setLoading(true);
     try {
+      // Get the user from Firebase Auth
+      const currentUser = auth.currentUser;
+      
       await addDoc(collection(db, "items"), {
         ...formData,
         images: localImages.map((i) => i.preview),
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        ownerId: currentUser ? currentUser.uid : null // <--- Bind post to User ID
       });
       onDone();
     } catch (err) {
@@ -808,8 +837,34 @@ function PostForm({ onDone, onCancel }) {
   );
 }
 
-// --- Splash Screen (Updated with Kurdish Text) ---
+// --- Splash Screen (Updated with Word-by-Word Animation) ---
 function Splash({ onSelect }) {
+  // Stagger configurations for the Arabic verse
+  const verseContainer = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.15, // Delay between each word appearing
+        delayChildren: 0.3,
+      }
+    }
+  };
+
+  const verseWord = {
+    hidden: { opacity: 0, y: 10, filter: "blur(4px)" },
+    visible: { 
+      opacity: 1, 
+      y: 0, 
+      filter: "blur(0px)",
+      transition: { duration: 0.5, ease: "easeOut" } 
+    }
+  };
+
+  // Splitting the verses into arrays of words
+  const line1 = ["﴿", "إِنَّ", "اللَّهَ", "يَأْمُرُكُمْ", "أَن", "تُؤَدُّوا"];
+  const line2 = ["الْأَمَانَاتِ", "إِلَىٰ", "أَهْلِهَا", "﴾"];
+
   return (
     <div
       className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden"
@@ -841,65 +896,59 @@ function Splash({ onSelect }) {
         />
       </div>
 
-      {/* Floating Particles */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        {[...Array(10)].map((_, i) => (
-          <div
-            key={i}
-            className="absolute w-1 h-1 bg-teal-400 rounded-full opacity-40 animate-float"
-            style={{
-              left: `${Math.random() * 100}%`,
-              top: `${Math.random() * 100}%`,
-              animationDelay: `${Math.random() * 5000}ms`,
-              animationDuration: `${5000 + Math.random() * 5000}ms`,
-            }}
-          />
-        ))}
-      </div>
-
       <motion.div
         initial={{ opacity: 0, y: 40 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8 }}
         className="relative z-10 text-center max-w-sm w-full space-y-6"
       >
-        {/* Quran Verse */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className="rounded-3xl p-4 bg-white/80 backdrop-blur-sm border border-teal-100 shadow-lg"
-        >
+        {/* Quran Verse with Word-by-word animation */}
+        <div className="rounded-3xl p-4 bg-white/80 backdrop-blur-sm border border-teal-100 shadow-lg">
           <div className="flex items-center gap-1.5 mb-3 justify-center">
             <div className="h-px flex-1 bg-gradient-to-r from-transparent to-teal-200" />
             <span className="text-teal-400 text-lg">✦</span>
             <div className="h-px flex-1 bg-gradient-to-l from-transparent to-teal-200" />
           </div>
-          <p
-            className="text-teal-700 text-2xl md:text-3xl leading-[2] font-medium"
-            style={{
-              fontFamily: "'Amiri', serif",
-              direction: "rtl",
-            }}
+          
+          <motion.div
+            variants={verseContainer}
+            initial="hidden"
+            animate="visible"
+            className="text-teal-700 text-2xl md:text-3xl leading-[2] font-medium flex flex-col items-center justify-center gap-2"
+            style={{ fontFamily: "'Amiri', serif", direction: "rtl" }}
           >
-            ﴿ إِنَّ اللَّهَ يَأْمُرُكُمْ أَن تُؤَدُّوا
-            <br />
-            الْأَمَانَاتِ إِلَىٰ أَهْلِهَا ﴾
-          </p>
-          <p className="text-teal-500/80 text-xs md:text-sm mt-3">— سورة النساء: ٥٨ —</p>
-          <p
-            className="text-teal-600 text-xs md:text-sm mt-2 font-medium"
-            style={{ fontFamily: "'NRT', sans-serif" }}
+            <div className="flex flex-wrap justify-center gap-x-2">
+              {line1.map((word, i) => (
+                <motion.span key={`l1-${i}`} variants={verseWord}>{word}</motion.span>
+              ))}
+            </div>
+            <div className="flex flex-wrap justify-center gap-x-2">
+              {line2.map((word, i) => (
+                <motion.span key={`l2-${i}`} variants={verseWord}>{word}</motion.span>
+              ))}
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 2.2, duration: 1 }} // Appears after Arabic finishes
           >
-            بێگومان خودا فەرمانتان پێدەکات کە ئەمانەتەکان بگێڕنەوە بۆ خاوەنەکانیان
-          </p>
-        </motion.div>
+            <p className="text-teal-500/80 text-xs md:text-sm mt-3">— سورة النساء: ٥٨ —</p>
+            <p
+              className="text-teal-600 text-xs md:text-sm mt-2 font-medium"
+              style={{ fontFamily: "'NRT', sans-serif" }}
+            >
+              بێگومان خودا فەرمانتان پێدەکات کە ئەمانەتەکان بگێڕنەوە بۆ خاوەنەکانیان
+            </p>
+          </motion.div>
+        </div>
 
         {/* Logo & Title */}
         <motion.div
           initial={{ scale: 0.5, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          transition={{ delay: 0.4, type: "spring", stiffness: 200 }}
+          transition={{ delay: 1.0, type: "spring", stiffness: 200 }}
         >
           <div className="w-16 h-16 md:w-20 md:h-20 mx-auto rounded-3xl flex items-center justify-center mb-3 bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 shadow-lg">
             <span className="text-4xl">🔍</span>
@@ -914,7 +963,7 @@ function Splash({ onSelect }) {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.65 }}
+          transition={{ delay: 1.2 }}
           className="flex gap-3"
         >
           <motion.button
@@ -935,23 +984,11 @@ function Splash({ onSelect }) {
           </motion.button>
         </motion.div>
       </motion.div>
-
-      {/* CSS Animations */}
-      <style jsx>{`
-        @keyframes float {
-          0% { transform: translateY(0) rotate(0deg); opacity: 0.4; }
-          50% { opacity: 0.8; }
-          100% { transform: translateY(-15px) rotate(360deg); opacity: 0.4; }
-        }
-        .animate-float {
-          animation: float 8s ease-in-out infinite;
-        }
-      `}</style>
     </div>
   );
 }
 
-// --- Main Component (Mobile-Optimized) ---
+// --- Main Component ---
 export default function Home() {
   const [items, setItems] = useState([]);
   const [mode, setMode] = useState(null);
@@ -962,7 +999,28 @@ export default function Home() {
   const [success, setSuccess] = useState(false);
   const [showAI, setShowAI] = useState(false);
   const [filteredItems, setFilteredItems] = useState([]);
+  
+  // --- Auth State ---
+  const [user, setUser] = useState(null);
 
+  // Auth Listener
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return unsub; // Clean up listener on unmount
+  }, []);
+
+  const handleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Login failed", error);
+    }
+  };
+
+  // Items Listener
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "items"), (snap) => {
       setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
@@ -994,18 +1052,39 @@ export default function Home() {
       dir="rtl"
       style={{ background: "#f8fafc", fontFamily: "'NRT', sans-serif" }}
     >
-      {/* Main Container - Full Width on Mobile, 80% on Desktop */}
       <div className="w-full md:w-[80%] max-w-6xl mx-auto px-2 md:px-0">
-        {/* Header */}
+        
+        {/* Header - Updated with Login/Logout logic */}
         <header className="sticky top-4 z-40 mb-4 md:mb-6">
           <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-lg border border-gray-100 p-3 md:p-4">
             <div className="flex items-center justify-between">
-              <button
-                onClick={() => { setMode(null); setShowForm(false); setFilteredItems([]); }}
-                className="text-xl md:text-2xl font-black text-gray-900 tracking-tight hover:text-teal-600 transition-colors"
-              >
-                دۆزین
-              </button>
+              
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => { setMode(null); setShowForm(false); setFilteredItems([]); }}
+                  className="text-xl md:text-2xl font-black text-gray-900 tracking-tight hover:text-teal-600 transition-colors"
+                >
+                  دۆزین
+                </button>
+
+                {/* Login Status & Buttons */}
+                {user ? (
+                  <button 
+                    onClick={() => signOut(auth)}
+                    className="text-xs font-medium text-gray-500 hover:text-red-500 transition-colors px-2 py-1"
+                  >
+                    چوونە دەرەوە
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleLogin}
+                    className="flex items-center gap-1.5 text-xs font-bold bg-teal-50 text-teal-600 px-3 py-1.5 rounded-full hover:bg-teal-100 transition-colors"
+                  >
+                    <FaGoogle size={10} /> چوونە ژوورەوە
+                  </button>
+                )}
+              </div>
+
               <div className="flex gap-1.5 md:gap-2">
                 <button
                   onClick={() => {
@@ -1071,12 +1150,20 @@ export default function Home() {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    onClick={() => setShowForm(true)}
+                    onClick={() => {
+                      // Require Login to open the post form
+                      if (user) {
+                        setShowForm(true);
+                      } else {
+                        // Prompt login first
+                        handleLogin();
+                      }
+                    }}
                     className="w-full flex items-center justify-center gap-2 py-4 md:py-5 text-teal-600 font-semibold text-base md:text-lg transition-all hover:bg-teal-50"
                     whileHover={{ scale: 1.01 }}
                     whileTap={{ scale: 0.99 }}
                   >
-                    <FaPlus size={16} /> تۆمارکردنی شتێکی دۆزراوە
+                    <FaPlus size={16} /> {user ? "تۆمارکردنی شتێکی دۆزراوە" : "چوونە ژوورەوە بۆ تۆمارکردن"}
                   </motion.button>
                 )}
               </AnimatePresence>
@@ -1100,7 +1187,6 @@ export default function Home() {
           {/* Filters - only in lost mode */}
           {mode === "lost" && (
             <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-lg border border-gray-100 p-4 md:p-6 space-y-4">
-              {/* Category Filter */}
               <div>
                 <p className="font-bold text-base md:text-lg text-gray-900 mb-2 flex items-center gap-2">
                   <FaSearch className="text-teal-500" /> جۆری شت
@@ -1123,7 +1209,6 @@ export default function Home() {
 
               <div className="border-t border-gray-100" />
 
-              {/* City Filter */}
               <div>
                 <p className="font-bold text-base md:text-lg text-gray-900 mb-2">شار</p>
                 <div className="flex flex-wrap gap-1.5">
@@ -1199,6 +1284,7 @@ export default function Home() {
                 <ItemCard
                   key={item.id}
                   item={item}
+                  currentUser={user} // Pass the currently logged-in user down to the card
                   onImageClick={(imgs, idx) => setLightbox({ images: imgs.filter(Boolean), idx })}
                 />
               ))}
@@ -1211,14 +1297,6 @@ export default function Home() {
               <p className="text-gray-500 text-base md:text-xl">
                 {filteredItems.length > 0 ? "ببورە نەدۆزرایەوە" : "هیچ شتێک نییە"}
               </p>
-              {mode === "lost" && (
-                <button
-                  onClick={() => setShowAI(true)}
-                  className="mt-4 flex items-center justify-center gap-1.5 font-semibold text-teal-600 bg-teal-50 hover:bg-teal-100 px-5 py-2.5 rounded-full transition-all shadow-sm text-sm"
-                >
-                  <FaRobot size={14} /> یارمەتی AI بخوازە
-                </button>
-              )}
             </div>
           )}
         </main>
@@ -1248,21 +1326,6 @@ export default function Home() {
           />
         )}
       </AnimatePresence>
-
-      {/* Floating AI Button */}
-      {mode === "lost" && !showAI && (
-        <motion.button
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.94 }}
-          onClick={() => setShowAI(true)}
-          className="fixed bottom-4 left-4 z-40 flex items-center justify-center rounded-2xl bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-xl"
-          style={{ width: 50, height: 50 }}
-        >
-          <FaRobot size={20} />
-        </motion.button>
-      )}
     </div>
   );
 }
