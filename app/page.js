@@ -3,12 +3,11 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaPhoneAlt, FaPlus, FaTimes, FaMapMarkerAlt, FaCalendarAlt,
-  FaCamera, FaChevronLeft, FaChevronRight, FaMicrophone,
-  FaMicrophoneSlash, FaRobot, FaPaperPlane, FaCheck, FaSearch,
-  FaTrash, FaGoogle // Added new icons
+  FaCamera, FaChevronLeft, FaChevronRight, FaCheck, FaSearch,
+  FaTrash, FaGoogle, FaEdit, FaUser
 } from "react-icons/fa";
-import { db, auth } from "@/firebase"; // Added auth
-import { collection, addDoc, onSnapshot, doc, deleteDoc } from "firebase/firestore";
+import { db, auth } from "@/firebase";
+import { collection, addDoc, onSnapshot, doc, deleteDoc, updateDoc, query, orderBy, limit } from "firebase/firestore";
 import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "firebase/auth";
 
 // --- Design Tokens ---
@@ -19,11 +18,9 @@ const colors = {
   dark: "#0f172a",
   light: "#f8fafc",
   white: "#ffffff",
-  muted: "#94a3b8",
   border: "#e2e8f0",
   success: "#22c55e",
   error: "#ef4444",
-  warning: "#f59e0b"
 };
 
 // --- Constants ---
@@ -52,45 +49,43 @@ const categories = [
 ];
 
 const categoryMap = Object.fromEntries(categories.map((c) => [c.value, c]));
-const SIZE_LIMIT = 1 * 1024 * 1024; // 1MB
 
-// --- Image Helpers ---
-const fileToBase64 = (file) =>
-  new Promise((res, rej) => {
+// --- Image Helpers (Compression for fast upload) ---
+const processImageFile = (file) => {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = () => res(reader.result);
-    reader.onerror = rej;
-  });
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
 
-const toGrayscaleBase64 = (file) =>
-  new Promise((res, rej) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      for (let i = 0; i < data.data.length; i += 4) {
-        const gray = 0.299 * data.data[i] + 0.587 * data.data[i+1] + 0.114 * data.data[i+2];
-        data.data[i] = data.data[i+1] = data.data[i+2] = gray;
-      }
-      ctx.putImageData(data, 0, 0);
-      URL.revokeObjectURL(url);
-      res(canvas.toDataURL("image/jpeg", 0.72));
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve({ preview: canvas.toDataURL("image/jpeg", 0.6), grayscale: false });
+      };
     };
-    img.onerror = rej;
-    img.src = url;
+    reader.onerror = (error) => reject(error);
   });
-
-const processImageFile = async (file) => {
-  if (file.size > SIZE_LIMIT) {
-    return { preview: await toGrayscaleBase64(file), grayscale: true };
-  }
-  return { preview: await fileToBase64(file), grayscale: false };
 };
 
 // --- Lightbox ---
@@ -109,160 +104,115 @@ function Lightbox({ images, startIndex, onClose }) {
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 bg-black/90 backdrop-blur-sm"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 bg-black/95 backdrop-blur-md"
       onClick={onClose}
     >
       <motion.div
-        initial={{ scale: 0.85, y: 20 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.85 }}
-        className="relative max-w-[95vw] max-h-[85vh] w-full bg-white/10 rounded-3xl p-2 backdrop-blur-md border border-white/20"
+        initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9 }}
+        className="relative max-w-full max-h-full w-full p-1 flex items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
-        <img
-          src={images[idx]}
-          alt=""
-          className="w-full h-full object-contain rounded-2xl"
-        />
+        <img src={images[idx]} alt="" className="max-w-full max-h-[85vh] object-contain rounded-2xl" />
         {images.length > 1 && (
-          <>
-            <button
-              onClick={() => setIdx((i) => (i - 1 + images.length) % images.length)}
-              className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/30 text-white transition-all backdrop-blur-sm"
-            >
+          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-black/50 p-2 rounded-full backdrop-blur-md">
+            <button onClick={() => setIdx((i) => (i - 1 + images.length) % images.length)} className="w-10 h-10 flex items-center justify-center rounded-full bg-white/20 text-white active:scale-90 transition-all">
               <FaChevronLeft size={16} />
             </button>
-            <button
-              onClick={() => setIdx((i) => (i + 1) % images.length)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/30 text-white transition-all backdrop-blur-sm"
-            >
+            <span className="text-white text-sm font-medium px-2">{idx + 1} / {images.length}</span>
+            <button onClick={() => setIdx((i) => (i + 1) % images.length)} className="w-10 h-10 flex items-center justify-center rounded-full bg-white/20 text-white active:scale-90 transition-all">
               <FaChevronRight size={16} />
             </button>
-            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-white/80 text-indigo-900 px-3 py-1 rounded-full text-xs font-medium">
-              {idx + 1} / {images.length}
-            </div>
-          </>
+          </div>
         )}
-        <button
-          onClick={onClose}
-          className="absolute -top-2 -right-2 w-8 h-8 flex items-center justify-center rounded-full bg-red-500 hover:bg-red-600 text-white transition-all"
-        >
-          <FaTimes size={14} />
+        <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center rounded-full bg-red-500 text-white shadow-lg active:scale-90 transition-all">
+          <FaTimes size={16} />
         </button>
       </motion.div>
     </motion.div>
   );
 }
 
-// --- Item Card (Updated with Delete functionality) ---
-function ItemCard({ item, currentUser, onImageClick }) {
+// --- Item Card (Responsive for all screens) ---
+function ItemCard({ item, currentUser, onImageClick, onEdit }) {
   const cat = categoryMap[item.category] || { label: item.category, emoji: "📦" };
   const imgs = (item.images || []).filter(Boolean);
 
   const handleDelete = async () => {
     if (window.confirm("دڵنیایت لە سڕینەوەی ئەم پۆستە؟")) {
-      try {
-        await deleteDoc(doc(db, "items", item.id));
-      } catch (err) {
-        console.error("Error deleting document:", err);
-      }
+      try { await deleteDoc(doc(db, "items", item.id)); } 
+      catch (err) { console.error(err); }
     }
   };
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -5 }}
-      transition={{ type: "spring", stiffness: 240, damping: 22 }}
-      className="group bg-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden border border-gray-100 flex flex-col"
+      initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
+      className="bg-white rounded-3xl shadow-lg shadow-gray-200/50 overflow-hidden border border-gray-100 flex flex-col h-full"
     >
       {imgs.length > 0 ? (
-        <div
-          className="relative h-40 md:h-48 overflow-hidden bg-gray-50 cursor-pointer flex-shrink-0"
-          onClick={() => onImageClick(imgs, 0)}
-        >
-          <img
-            src={imgs[0]}
-            alt=""
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-            onError={(e) => { e.currentTarget.style.display = "none"; }}
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+        <div className="relative h-48 md:h-56 w-full bg-gray-50 cursor-pointer shrink-0" onClick={() => onImageClick(imgs, 0)}>
+          <img src={imgs[0]} alt="" className="w-full h-full object-cover transition-transform hover:scale-105 duration-500" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
           {imgs.length > 1 && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onImageClick(imgs, 1);
-              }}
-              className="absolute bottom-2 right-2 bg-white/90 text-indigo-900 text-xs font-medium px-2 py-1 rounded-full hover:bg-white transition-all"
-            >
+            <span className="absolute bottom-3 right-3 bg-white/90 backdrop-blur-sm text-gray-800 text-xs font-bold px-3 py-1.5 rounded-full pointer-events-none">
               +{imgs.length - 1} وێنە
-            </button>
+            </span>
           )}
-          <span className="absolute top-2 right-2 text-2xl drop-shadow-lg">{cat.emoji}</span>
+          <span className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm text-xl px-2 py-1 rounded-xl shadow-sm pointer-events-none">{cat.emoji}</span>
         </div>
       ) : (
-        <div className="h-20 md:h-24 flex-shrink-0 flex items-center justify-center bg-gradient-to-br from-teal-50 to-cyan-50 text-4xl">
+        <div className="h-48 md:h-56 flex items-center justify-center bg-gradient-to-br from-teal-50 to-cyan-50 text-6xl shrink-0">
           {cat.emoji}
         </div>
       )}
 
-      <div className="p-4 md:p-5 space-y-2 flex-1 flex flex-col justify-between">
-        <div>
-          <span className="inline-block px-2 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700 mb-1">
+      <div className="p-4 md:p-5 flex flex-col flex-grow gap-2">
+        <div className="flex justify-between items-start">
+          <span className="inline-block px-3 py-1 rounded-full text-[11px] font-bold bg-teal-100 text-teal-800">
             {cat.label}
           </span>
-          {item.name && <p className="font-bold text-base md:text-lg text-gray-900">{item.name}</p>}
-          <p className="text-gray-600 text-xs md:text-sm leading-relaxed line-clamp-2 mt-1 mb-2">{item.description}</p>
-          <div className="flex flex-wrap items-center gap-2 md:gap-4 text-xs md:text-sm text-gray-500 mb-3">
-            <span className="flex items-center gap-1">
-              <FaMapMarkerAlt className="text-teal-500" /> {item.city}
-            </span>
-            <span className="flex items-center gap-1">
-              <FaCalendarAlt className="text-teal-500" /> {item.date}
-            </span>
-          </div>
+          <span className="text-xs text-gray-400 font-mono">{item.phone}</span>
+        </div>
+        
+        {item.name && <h3 className="font-extrabold text-lg text-gray-900 leading-tight">{item.name}</h3>}
+        <p className="text-gray-600 text-sm leading-relaxed line-clamp-3">{item.description}</p>
+        
+        <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-gray-500 mt-1 mb-2">
+          <span className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-lg">
+            <FaMapMarkerAlt className="text-teal-500" /> {item.city}
+          </span>
+          <span className="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-lg">
+            <FaCalendarAlt className="text-teal-500" /> {item.date}
+          </span>
         </div>
 
-        <div className="flex items-center justify-between pt-3 border-t border-gray-100 mt-auto">
-          <span className="text-xs text-gray-500 font-mono">{item.phone}</span>
-          <div className="flex items-center gap-2">
-            {/* Show delete button only if current user owns the post */}
-            {currentUser && currentUser.uid === item.ownerId && (
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleDelete}
-                className="flex items-center justify-center bg-red-50 hover:bg-red-100 text-red-500 font-medium h-7 w-7 rounded-full transition-all text-xs"
-                title="سڕینەوە"
-              >
-                <FaTrash size={11} />
-              </motion.button>
-            )}
-            
-            <motion.a
-              href={`tel:${item.phone}`}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className="flex items-center gap-1.5 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white font-medium py-1.5 px-3 rounded-full transition-all shadow-lg shadow-teal-500/30 text-xs"
-            >
-              <FaPhoneAlt size={12} /> پەیوەندی
-            </motion.a>
-          </div>
+        <div className="flex items-center gap-2 pt-3 mt-auto border-t border-gray-50">
+          {currentUser && currentUser.uid === item.ownerId && (
+            <div className="flex gap-2">
+              <button onClick={() => onEdit(item)} className="h-11 w-11 flex items-center justify-center bg-blue-50 text-blue-600 rounded-2xl hover:bg-blue-100 active:scale-95 transition-all">
+                <FaEdit size={16} />
+              </button>
+              <button onClick={handleDelete} className="h-11 w-11 flex items-center justify-center bg-red-50 text-red-500 rounded-2xl hover:bg-red-100 active:scale-95 transition-all">
+                <FaTrash size={14} />
+              </button>
+            </div>
+          )}
+          <a
+            href={`tel:${item.phone}`}
+            className="flex-1 flex items-center justify-center gap-2 h-11 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white font-bold rounded-2xl active:scale-95 transition-all shadow-md shadow-teal-500/30"
+          >
+            <FaPhoneAlt size={14} /> پەیوەندی کردن
+          </a>
         </div>
       </div>
     </motion.div>
   );
 }
 
-// --- Upload Zone (Mobile-Optimized) ---
+// --- Upload Zone ---
 function UploadZone({ images, onAdd, onRemove, onView }) {
   const fileRef = useRef(null);
-  const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   const handleFiles = async (files) => {
@@ -277,67 +227,29 @@ function UploadZone({ images, onAdd, onRemove, onView }) {
   return (
     <div className="space-y-3">
       <div
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
         onClick={() => fileRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-2xl p-4 md:p-6 text-center cursor-pointer transition-all duration-300 ${
-          dragging
-            ? "border-teal-400 bg-teal-50/50"
-            : "border-gray-200 hover:border-teal-300 hover:bg-teal-50/20"
-        }`}
+        className="w-full border-2 border-dashed border-teal-200 bg-teal-50/30 hover:bg-teal-50 rounded-3xl p-6 text-center cursor-pointer active:scale-[0.98] transition-all"
       >
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
-        />
+        <input ref={fileRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
         <div className="flex flex-col items-center gap-2">
-          <div className="w-12 h-12 md:w-16 md:h-16 rounded-2xl bg-teal-50 flex items-center justify-center">
-            <FaCamera className="text-xl md:text-2xl text-teal-500" />
+          <div className="w-14 h-14 rounded-2xl bg-teal-100 flex items-center justify-center text-teal-600">
+            <FaCamera size={24} />
           </div>
           {uploading ? (
-            <div className="flex flex-col items-center gap-1.5">
-              <div className="animate-spin rounded-full h-5 w-5 border-3 border-teal-300 border-t-teal-600"></div>
-              <p className="text-teal-600 font-medium text-sm">بارکردن...</p>
-            </div>
+            <p className="text-teal-600 font-bold text-sm mt-2 animate-pulse">ئامادەکردنی وێنەکان...</p>
           ) : (
-            <>
-              <p className="text-gray-700 font-medium text-sm md:text-base">وێنەیەک دابنێ</p>
-              <p className="text-gray-500 text-xs">بۆ زۆرتر وێنە، بکەنەوە لەسەر ئەوەیەکە</p>
-            </>
+            <p className="text-gray-700 font-bold text-sm mt-2">زیادکردنی وێنە</p>
           )}
         </div>
       </div>
 
       {images.length > 0 && (
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
           {images.map((img, i) => (
-            <div key={i} className="relative group aspect-square rounded-xl overflow-hidden shadow-md">
-              <img
-                src={img.preview}
-                alt=""
-                className={`w-full h-full object-cover cursor-pointer ${
-                  img.grayscale ? "grayscale brightness-90" : ""
-                }`}
-                onClick={() => onView(i)}
-                onError={(e) => { e.currentTarget.style.display = "none"; }}
-              />
-              {img.grayscale && (
-                <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                  گرێ
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => onRemove(i)}
-                className="absolute top-1 right-1 w-5 h-5 flex items-center justify-center rounded-full bg-red-500 hover:bg-red-600 text-white opacity-0 group-hover:opacity-100 transition-all"
-              >
-                <FaTimes size={10} />
+            <div key={i} className="relative aspect-square rounded-2xl overflow-hidden shadow-sm border border-gray-100 group">
+              <img src={img.preview} alt="" className="w-full h-full object-cover cursor-pointer" onClick={() => onView(i)} />
+              <button type="button" onClick={() => onRemove(i)} className="absolute top-1.5 right-1.5 w-7 h-7 flex items-center justify-center rounded-full bg-black/50 backdrop-blur-md text-white active:scale-90 hover:bg-red-500 transition-all opacity-100 md:opacity-0 md:group-hover:opacity-100">
+                <FaTimes size={12} />
               </button>
             </div>
           ))}
@@ -353,10 +265,10 @@ function FilterBadge({ active, onClick, children }) {
     <button
       type="button"
       onClick={onClick}
-      className={`px-3 py-1 rounded-full text-xs md:text-sm font-medium transition-all duration-200 ${
+      className={`shrink-0 px-4 py-2 rounded-2xl text-sm font-bold transition-all active:scale-95 ${
         active
-          ? "bg-teal-100 text-teal-700 shadow-sm"
-          : "bg-white text-gray-600 hover:bg-gray-50 border border-gray-200"
+          ? "bg-teal-500 text-white shadow-md shadow-teal-500/30"
+          : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
       }`}
     >
       {children}
@@ -364,269 +276,21 @@ function FilterBadge({ active, onClick, children }) {
   );
 }
 
-// --- AI Panel ---
-function AIPanel({ items, onClose, onFilterItems }) {
-  const [messages, setMessages] = useState([
-    {
-      role: "ai",
-      text: "سڵاو! من یارمەتیدەری زیرەکتم. پرسیارت بکە لەبارەی شتێکی ونبووت — دەتوانم لە لیستی شتە دۆزراوەکاندا بگەڕێم بۆت.",
-      imageUrl: null,
-      filteredItems: []
-    }
-  ]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [error, setError] = useState(null);
-  const bottomRef = useRef(null);
-  const recRef = useRef(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const send = async (text) => {
-    const q = (text || input).trim();
-    if (!q || loading) return;
-
-    setInput("");
-    setMessages((p) => [...p, { role: "user", text: q, imageUrl: null, filteredItems: [] }]);
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch("/api/mistral", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: q,
-          items: items.map((it) => ({
-            id: it.id,
-            category: categoryMap[it.category]?.label || it.category,
-            city: it.city,
-            date: it.date,
-            description: it.description,
-            name: it.name,
-            phone: it.phone,
-            images: it.images
-          }))
-        })
-      });
-
-      const data = await response.json();
-
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      if (data.text.includes("نەدۆزرایەوە") || data.text.includes("هیچ") || data.filteredItems.length === 0) {
-        setMessages((p) => [...p, {
-          role: "ai",
-          text: data.text,
-          imageUrl: null,
-          filteredItems: []
-        }]);
-        onFilterItems([]);
-      } else {
-        setMessages((p) => [...p, {
-          role: "ai",
-          text: data.text,
-          imageUrl: data.imageUrl,
-          filteredItems: data.filteredItems
-        }]);
-        onFilterItems(data.filteredItems);
-      }
-
-    } catch (err) {
-      console.error("AI Error:", err);
-      setError("کێشەیەک ڕویدا دووبارە هەوڵبدە");
-      setMessages((p) => [...p, {
-        role: "ai",
-        text: "ببورە، کێشەیەک ڕویدا. تکایە دووبارە هەوڵ بدە.",
-        imageUrl: null,
-        filteredItems: []
-      }]);
-      onFilterItems([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const toggleVoice = () => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      alert("بروزەری تۆ پشتگیری دەنگ ناکات.");
-      return;
-    }
-
-    if (listening) {
-      recRef.current?.stop();
-      setListening(false);
-      return;
-    }
-
-    const rec = new SR();
-    rec.lang = "ku-IQ";
-    rec.interimResults = false;
-    rec.onresult = (e) => {
-      setListening(false);
-      send(e.results[0][0].transcript);
-    };
-    rec.onerror = rec.onend = () => setListening(false);
-    recRef.current = rec;
-    rec.start();
-    setListening(true);
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 50, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 50, scale: 0.95 }}
-      className="fixed inset-x-2 bottom-2 z-50 flex flex-col rounded-3xl overflow-hidden bg-white shadow-2xl md:max-w-md md:mx-auto md:bottom-4 md:left-auto md:right-auto"
-      style={{ maxHeight: "85vh" }}
-    >
-      {/* AI Panel content remains exactly the same as your code */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-teal-50 to-cyan-50">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-teal-100 flex items-center justify-center">
-            <FaRobot className="text-teal-600 text-lg" />
-          </div>
-          <div>
-            <p className="font-bold text-gray-900 text-sm">یارمەتیدەری زیرەک</p>
-            <p className="text-xs text-gray-500">{items.length} شتی تۆمارکراو</p>
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors"
-        >
-          <FaTimes size={12} />
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2 bg-white" dir="rtl">
-        {messages.map((m, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[85%] px-3 py-2 rounded-2xl whitespace-pre-wrap text-xs md:text-sm ${
-                m.role === "user"
-                  ? "bg-teal-50 text-teal-800 rounded-br-sm"
-                  : "bg-gray-100 text-gray-800 rounded-bl-sm"
-              }`}
-              style={{ lineHeight: 1.5 }}
-            >
-              {m.text}
-              {m.imageUrl && (
-                <div className="mt-2 rounded-xl overflow-hidden shadow-md">
-                  <img
-                    src={m.imageUrl}
-                    alt="Generated image"
-                    className="w-full max-h-32 object-cover rounded-lg"
-                    onError={(e) => { e.currentTarget.style.display = "none"; }}
-                  />
-                </div>
-              )}
-              {m.filteredItems && m.filteredItems.length > 0 && (
-                <div className="mt-2 p-2 bg-white rounded-lg shadow-sm">
-                  <p className="text-xs font-medium text-teal-600 mb-1">
-                    {m.filteredItems.length} شت دۆزرایەوە:
-                  </p>
-                  <div className="space-y-1">
-                    {m.filteredItems.slice(0, 3).map((item, idx) => (
-                      <div key={idx} className="text-xs p-1 bg-gray-50 rounded">
-                        <p className="font-medium">{item.name || categoryMap[item.category]?.label || 'نەدیار'}</p>
-                        <p className="text-gray-500">{item.city} - {item.phone}</p>
-                      </div>
-                    ))}
-                    {m.filteredItems.length > 3 && (
-                      <p className="text-xs text-gray-500">+{m.filteredItems.length - 3} شتەکەی تر...</p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        ))}
-
-        {loading && (
-          <div className="flex justify-end">
-            <div className="px-3 py-2 bg-gray-100 rounded-2xl rounded-br-sm flex gap-1">
-              {[0, 1, 2].map((d) => (
-                <motion.div
-                  key={d}
-                  className="w-1.5 h-1.5 rounded-full bg-teal-500"
-                  animate={{ y: [0, -5, 0] }}
-                  transition={{ repeat: Infinity, duration: 0.65, delay: d * 0.15 }}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="flex justify-start">
-            <div className="px-3 py-2 bg-red-50 text-red-600 rounded-2xl rounded-bl-sm text-xs">
-              {error}
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      <div className="px-3 pb-3 pt-2 border-t border-gray-100 bg-white">
-        <div className="flex gap-1.5" dir="rtl">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="پرسیارت بنووسە..."
-            className="flex-1 px-3 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-teal-500/50 focus:border-teal-500 transition-all text-sm"
-            style={{ background: "#f8fafc", color: "#1e293b" }}
-          />
-          <button
-            onClick={toggleVoice}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-              listening
-                ? "bg-red-100 text-red-500 border border-red-200"
-                : "bg-teal-50 text-teal-600 border border-teal-200"
-            }`}
-          >
-            {listening ? <FaMicrophoneSlash size={16} /> : <FaMicrophone size={16} />}
-          </button>
-          <button
-            onClick={() => send()}
-            disabled={!input.trim() || loading}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-              !input.trim() || loading
-                ? "bg-teal-100 text-teal-400 cursor-not-allowed"
-                : "bg-teal-500 text-white hover:bg-teal-600"
-            }`}
-          >
-            <FaPaperPlane size={14} />
-          </button>
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-// --- Post Form (Updated to attach ownerId) ---
-function PostForm({ onDone, onCancel }) {
+// --- Post Form ---
+function PostForm({ onDone, onCancel, editItem }) {
   const [formData, setFormData] = useState({
-    category: "",
-    city: "",
-    description: "",
-    phone: "",
-    name: "",
-    date: new Date().toISOString().split("T")[0],
+    category: editItem?.category || "",
+    city: editItem?.city || "",
+    description: editItem?.description || "",
+    phone: editItem?.phone || "",
+    name: editItem?.name || "",
+    date: editItem?.date || new Date().toISOString().split("T")[0],
   });
-  const [localImages, setLocalImages] = useState([]);
+  
+  const [localImages, setLocalImages] = useState(
+    editItem?.images ? editItem.images.map(img => ({ preview: img, grayscale: false })) : []
+  );
+  
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [lightbox, setLightbox] = useState(null);
@@ -637,10 +301,8 @@ function PostForm({ onDone, onCancel }) {
     const e = {};
     if (!formData.category) e.category = "جۆری شتەکە پێویستە";
     if (!formData.city) e.city = "شار دیاری بکە";
-    if (!formData.description || formData.description.length < 10)
-      e.description = "تکایە زانیاری زیاتر بنووسە";
-    if (!formData.phone || formData.phone.length < 10)
-      e.phone = "ژمارەی تەلەفۆنی خۆت پێویستە";
+    if (!formData.description || formData.description.length < 10) e.description = "تکایە زانیاری زیاتر بنووسە";
+    if (!formData.phone || formData.phone.length < 10) e.phone = "ژمارەی تەلەفۆن پێویستە";
     if (!formData.date) e.date = "بەرواری پێویستە";
     setErrors(e);
     return !Object.keys(e).length;
@@ -649,380 +311,202 @@ function PostForm({ onDone, onCancel }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) return;
-
     setLoading(true);
     try {
-      // Get the user from Firebase Auth
       const currentUser = auth.currentUser;
-      
-      await addDoc(collection(db, "items"), {
+      const dataToSave = {
         ...formData,
         images: localImages.map((i) => i.preview),
-        createdAt: new Date().toISOString(),
-        ownerId: currentUser ? currentUser.uid : null // <--- Bind post to User ID
-      });
+        updatedAt: new Date().toISOString()
+      };
+      if (editItem) {
+        await updateDoc(doc(db, "items", editItem.id), dataToSave);
+      } else {
+        await addDoc(collection(db, "items"), {
+          ...dataToSave,
+          createdAt: new Date().toISOString(),
+          ownerId: currentUser ? currentUser.uid : null
+        });
+      }
       onDone();
     } catch (err) {
-      console.error(err);
       alert("کێشەیەک ڕویدا دووبارە هەوڵبدە");
     } finally {
       setLoading(false);
     }
   };
 
-  const previews = localImages.map((i) => i.preview).filter(Boolean);
-
-  const inputStyle = (hasError) => ({
-    width: "100%",
-    padding: "12px 14px",
-    borderRadius: "12px",
-    fontSize: "14px",
-    background: hasError ? "#fef2f2" : "#f8fafc",
-    border: `1px solid ${hasError ? colors.error : colors.border}`,
-    color: "#1e293b",
-    outline: "none",
-    fontFamily: "inherit",
-    transition: "all 0.2s ease"
-  });
+  const inputClass = (hasErr) => `w-full px-4 py-3.5 rounded-2xl text-sm transition-all outline-none border ${
+    hasErr ? "bg-red-50 border-red-300 text-red-900" : "bg-gray-50 border-transparent hover:bg-gray-100 focus:border-teal-400 focus:bg-white focus:ring-4 focus:ring-teal-500/10 text-gray-800"
+  }`;
 
   return (
     <>
-      <motion.form
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        onSubmit={handleSubmit}
-        className="space-y-4"
-      >
-        {/* Category */}
+      <motion.form initial={{ opacity: 0 }} animate={{ opacity: 1 }} onSubmit={handleSubmit} className="space-y-5">
+        
         <div>
-          {errors.category && (
-            <p className="text-red-500 text-xs mb-1.5">{errors.category}</p>
-          )}
-          <div className="grid grid-cols-4 gap-2">
+          {errors.category && <p className="text-red-500 text-xs font-bold mb-2">{errors.category}</p>}
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
             {categories.map((cat) => (
               <button
-                key={cat.value}
-                type="button"
-                onClick={() => set("category", cat.value)}
-                className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border-2 transition-all duration-200 ${
-                  formData.category === cat.value
-                    ? "border-teal-400 bg-teal-50"
-                    : "border-gray-200 hover:border-teal-200 bg-white"
+                key={cat.value} type="button" onClick={() => set("category", cat.value)}
+                className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border-2 transition-all active:scale-95 ${
+                  formData.category === cat.value ? "border-teal-500 bg-teal-50" : "border-gray-100 bg-white hover:border-gray-200"
                 }`}
               >
-                <span className="text-xl">{cat.emoji}</span>
-                <span className="text-xs font-medium text-center text-gray-600">
-                  {cat.label}
-                </span>
+                <span className="text-2xl">{cat.emoji}</span>
+                <span className="text-[10px] sm:text-xs font-bold text-center text-gray-700">{cat.label}</span>
               </button>
             ))}
           </div>
         </div>
 
-        {/* City */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            {errors.city && <p className="text-red-500 text-xs font-bold mb-1.5">{errors.city}</p>}
+            <select value={formData.city} onChange={(e) => set("city", e.target.value)} className={inputClass(errors.city)}>
+              <option value="">شار دیاری بکە...</option>
+              {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <div>
+            {errors.date && <p className="text-red-500 text-xs font-bold mb-1.5">{errors.date}</p>}
+            <input type="date" value={formData.date} onChange={(e) => set("date", e.target.value)} className={inputClass(errors.date)} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            {errors.phone && <p className="text-red-500 text-xs font-bold mb-1.5">{errors.phone}</p>}
+            <input type="tel" value={formData.phone} onChange={(e) => set("phone", e.target.value)} placeholder="ژمارەی تەلەفۆن بۆ پەیوەندی" className={inputClass(errors.phone)} dir="ltr" style={{textAlign: 'right'}} />
+          </div>
+          
+          <div>
+            <input type="text" value={formData.name} onChange={(e) => set("name", e.target.value)} placeholder="ناونیشانی کورت (ئارەزوومەندانە)" className={inputClass(false)} />
+          </div>
+        </div>
+
         <div>
-          {errors.city && <p className="text-red-500 text-xs mb-1.5">{errors.city}</p>}
-          <select
-            value={formData.city}
-            onChange={(e) => set("city", e.target.value)}
-            style={inputStyle(errors.city)}
-          >
-            <option value="" className="text-gray-500 text-sm">
-              شار دیاری بکە
-            </option>
-            {cities.map((c) => (
-              <option key={c} value={c} className="text-gray-800 text-sm">
-                {c}
-              </option>
-            ))}
-          </select>
+          {errors.description && <p className="text-red-500 text-xs font-bold mb-1.5">{errors.description}</p>}
+          <textarea value={formData.description} onChange={(e) => set("description", e.target.value)} placeholder="زانیاری تەواو (ڕەنگ، شوێن، جۆر...)" rows={4} className={`${inputClass(errors.description)} resize-none`} />
         </div>
 
-        {/* Date */}
-        <div>
-          {errors.date && <p className="text-red-500 text-xs mb-1.5">{errors.date}</p>}
-          <input
-            type="date"
-            value={formData.date}
-            onChange={(e) => set("date", e.target.value)}
-            style={inputStyle(errors.date)}
-          />
-        </div>
+        <UploadZone images={localImages} onAdd={(n) => setLocalImages((p) => [...p, ...n])} onRemove={(i) => setLocalImages((p) => p.filter((_, idx) => idx !== i))} onView={(i) => setLightbox(i)} />
 
-        {/* Name */}
-        <input
-          type="text"
-          value={formData.name}
-          onChange={(e) => set("name", e.target.value)}
-          placeholder="ناوێک یان زانیاریەک هەیە؟ (ئارەزوومەندانە)"
-          style={inputStyle(false)}
-        />
-
-        {/* Description */}
-        <div>
-          {errors.description && (
-            <p className="text-red-500 text-xs mb-1.5">{errors.description}</p>
-          )}
-          <textarea
-            value={formData.description}
-            onChange={(e) => set("description", e.target.value)}
-            placeholder="وەسفی شتی دۆزراوە (کوێ دۆزیتەوە، چ جۆرە...)"
-            rows={3}
-            style={{ ...inputStyle(errors.description), resize: "none" }}
-          />
-        </div>
-
-        {/* Phone */}
-        <div>
-          {errors.phone && <p className="text-red-500 text-xs mb-1.5">{errors.phone}</p>}
-          <input
-            type="tel"
-            value={formData.phone}
-            onChange={(e) => set("phone", e.target.value)}
-            placeholder="ژمارەی تەلەفۆن"
-            style={inputStyle(errors.phone)}
-          />
-        </div>
-
-        {/* Images */}
-        <div className="pt-1">
-          <p className="text-gray-700 font-medium mb-2 text-sm">وێنەکان</p>
-          <UploadZone
-            images={localImages}
-            onAdd={(n) => setLocalImages((p) => [...p, ...n])}
-            onRemove={(i) => setLocalImages((p) => p.filter((_, idx) => idx !== i))}
-            onView={(i) => setLightbox(i)}
-          />
-        </div>
-
-        <div className="flex gap-3 pt-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-700 font-semibold hover:bg-gray-50 transition-all text-sm"
-          >
-            پاشگەزبوونەوە
+        <div className="flex gap-3 pt-2">
+          <button type="button" onClick={onCancel} className="w-1/3 py-4 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold active:scale-95 transition-all text-sm md:text-base">
+            لابردن
           </button>
-          <motion.button
-            type="submit"
-            disabled={loading}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="flex-1 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white font-bold transition-all disabled:opacity-70 disabled:cursor-not-allowed text-sm"
-          >
-            {loading ? (
-              <span className="flex items-center justify-center gap-1.5">
-                <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
-                بارکردن...
-              </span>
-            ) : (
-              <span className="flex items-center justify-center gap-1.5">
-                <FaCheck size={12} /> تۆمارکردن
-              </span>
-            )}
-          </motion.button>
+          <button type="submit" disabled={loading} className="w-2/3 py-4 rounded-2xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white font-bold active:scale-95 transition-all disabled:opacity-70 text-sm md:text-base shadow-lg shadow-teal-500/30 flex items-center justify-center gap-2">
+            {loading ? <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div> : (editItem ? <FaEdit size={16} /> : <FaCheck size={16} />)}
+            {editItem ? "نوێکردنەوە" : "بڵاوکردنەوە"}
+          </button>
         </div>
       </motion.form>
 
       <AnimatePresence>
-        {lightbox !== null && previews.length > 0 && (
-          <Lightbox
-            images={previews}
-            startIndex={Math.min(lightbox, previews.length - 1)}
-            onClose={() => setLightbox(null)}
-          />
-        )}
+        {lightbox !== null && previews.length > 0 && <Lightbox images={previews} startIndex={Math.min(lightbox, previews.length - 1)} onClose={() => setLightbox(null)} />}
       </AnimatePresence>
     </>
   );
 }
 
-// --- Splash Screen (Updated with Word-by-Word Animation) ---
+// --- Splash Screen ---
 function Splash({ onSelect }) {
-  // Stagger configurations for the Arabic verse
-  const verseContainer = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.15, // Delay between each word appearing
-        delayChildren: 0.3,
-      }
-    }
-  };
-
-  const verseWord = {
-    hidden: { opacity: 0, y: 10, filter: "blur(4px)" },
-    visible: { 
-      opacity: 1, 
-      y: 0, 
-      filter: "blur(0px)",
-      transition: { duration: 0.5, ease: "easeOut" } 
-    }
-  };
-
-  // Splitting the verses into arrays of words
   const line1 = ["﴿", "إِنَّ", "اللَّهَ", "يَأْمُرُكُمْ", "أَن", "تُؤَدُّوا"];
   const line2 = ["الْأَمَانَاتِ", "إِلَىٰ", "أَهْلِهَا", "﴾"];
+  
+  const vContainer = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.12, delayChildren: 0.2 } } };
+  const vWord = { hidden: { opacity: 0, y: 10, filter: "blur(2px)" }, visible: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.5 } } };
 
   return (
-    <div
-      className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden"
-      dir="rtl"
-      style={{
-        background: "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)"
-      }}
-    >
-      {/* Background Effects */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <motion.div
-          animate={{ x: [0, 20, 0], y: [0, -15, 0] }}
-          transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute top-1/4 left-1/4 w-64 h-64 rounded-full"
-          style={{ background: "radial-gradient(circle, rgba(45, 212, 191, 0.1) 0%, transparent 70%)" }}
-        />
-        <motion.div
-          animate={{ x: [0, -15, 0], y: [0, 10, 0] }}
-          transition={{ duration: 17, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute bottom-1/4 right-1/4 w-48 h-48 rounded-full"
-          style={{ background: "radial-gradient(circle, rgba(59, 130, 246, 0.1) 0%, transparent 70%)" }}
-        />
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage: "radial-gradient(circle, rgba(0, 0, 0, 0.02) 1px, transparent 1px)",
-            backgroundSize: "25px 25px"
-          }}
-        />
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 40 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8 }}
-        className="relative z-10 text-center max-w-sm w-full space-y-6"
-      >
-        {/* Quran Verse with Word-by-word animation */}
-        <div className="rounded-3xl p-4 bg-white/80 backdrop-blur-sm border border-teal-100 shadow-lg">
-          <div className="flex items-center gap-1.5 mb-3 justify-center">
-            <div className="h-px flex-1 bg-gradient-to-r from-transparent to-teal-200" />
-            <span className="text-teal-400 text-lg">✦</span>
-            <div className="h-px flex-1 bg-gradient-to-l from-transparent to-teal-200" />
-          </div>
-          
-          <motion.div
-            variants={verseContainer}
-            initial="hidden"
-            animate="visible"
-            className="text-teal-700 text-2xl md:text-3xl leading-[2] font-medium flex flex-col items-center justify-center gap-2"
-            style={{ fontFamily: "'Amiri', serif", direction: "rtl" }}
-          >
-            <div className="flex flex-wrap justify-center gap-x-2">
-              {line1.map((word, i) => (
-                <motion.span key={`l1-${i}`} variants={verseWord}>{word}</motion.span>
-              ))}
-            </div>
-            <div className="flex flex-wrap justify-center gap-x-2">
-              {line2.map((word, i) => (
-                <motion.span key={`l2-${i}`} variants={verseWord}>{word}</motion.span>
-              ))}
-            </div>
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-br from-slate-50 to-teal-50/50" dir="rtl">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-sm space-y-8">
+        
+        <div className="bg-white/70 backdrop-blur-xl p-6 md:p-8 rounded-[2.5rem] border border-white shadow-xl shadow-teal-900/5">
+          {/* Arabic Verse */}
+          <motion.div variants={vContainer} initial="hidden" animate="visible" className="text-teal-800 text-2xl md:text-3xl leading-[2] text-center font-bold flex flex-col gap-2" style={{ fontFamily: "'Amiri', serif" }}>
+            <div className="flex flex-wrap justify-center gap-1.5">{line1.map((w, i) => <motion.span key={i} variants={vWord}>{w}</motion.span>)}</div>
+            <div className="flex flex-wrap justify-center gap-1.5">{line2.map((w, i) => <motion.span key={i} variants={vWord}>{w}</motion.span>)}</div>
           </motion.div>
 
+          {/* Divider */}
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 2.2, duration: 1 }} // Appears after Arabic finishes
+            initial={{ opacity: 0, scaleX: 0 }}
+            animate={{ opacity: 1, scaleX: 1 }}
+            transition={{ delay: 1.2, duration: 0.8, ease: "easeOut" }}
+            className="flex items-center justify-center gap-3 my-5 md:my-6"
           >
-            <p className="text-teal-500/80 text-xs md:text-sm mt-3">— سورة النساء: ٥٨ —</p>
-            <p
-              className="text-teal-600 text-xs md:text-sm mt-2 font-medium"
-              style={{ fontFamily: "'NRT', sans-serif" }}
-            >
-              بێگومان خودا فەرمانتان پێدەکات کە ئەمانەتەکان بگێڕنەوە بۆ خاوەنەکانیان
+            <div className="h-[2px] w-12 bg-gradient-to-r from-transparent to-teal-300 rounded-full"></div>
+            <span className="text-teal-400 text-sm">✦</span>
+            <div className="h-[2px] w-12 bg-gradient-to-l from-transparent to-teal-300 rounded-full"></div>
+          </motion.div>
+
+          {/* Kurdish Translation */}
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 1.6, duration: 0.8 }}
+            className="text-center space-y-2.5"
+          >
+            <p className="text-slate-700 text-sm md:text-base font-bold leading-relaxed">
+              بێگومان خودا فەرمانتان پێدەکات کە ئەمانەتەکان بگەڕێننەوە بۆ خاوەنەکانیان
+            </p>
+            <p className="text-teal-600/70 text-[11px] md:text-xs font-medium tracking-wide">
+              — سوورەتی النساء، ئایەتی ٥٨ —
             </p>
           </motion.div>
         </div>
 
-        {/* Logo & Title */}
-        <motion.div
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ delay: 1.0, type: "spring", stiffness: 200 }}
-        >
-          <div className="w-16 h-16 md:w-20 md:h-20 mx-auto rounded-3xl flex items-center justify-center mb-3 bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 shadow-lg">
-            <span className="text-4xl">🔍</span>
+        <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 2.0, type: "spring" }} className="text-center">
+          <div className="w-20 h-20 mx-auto bg-gradient-to-tr from-teal-400 to-cyan-400 rounded-3xl flex items-center justify-center shadow-2xl shadow-teal-500/40 mb-4 text-white text-4xl">
+            🔍
           </div>
-          <h1 className="font-black text-gray-900 mb-1" style={{ fontSize: 48, letterSpacing: "-0.02em" }}>
-            دۆزین
-          </h1>
-          <p className="text-gray-600 text-sm md:text-base">بڵاوکردنەوەی شتی دۆزراوە · گەڕان بۆ شتی ونبوو</p>
+          <h1 className="font-black text-slate-800 text-4xl mb-2 tracking-tight">دۆزین</h1>
+          <p className="text-slate-900 text-md  font-medium">پلاتفۆرمی دۆزین، پردێکە بۆ گەیاندنەوەی شتە ونبووەکان بە خاوەنەکانیان 
+
+</p>
         </motion.div>
 
-        {/* Action Buttons */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 1.2 }}
-          className="flex gap-3"
-        >
-          <motion.button
-            whileHover={{ scale: 1.03, boxShadow: "0 8px 25px rgba(45, 212, 191, 0.3)" }}
-            whileTap={{ scale: 0.97 }}
-            onClick={() => onSelect("find")}
-            className="flex-1 bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-600 hover:to-cyan-600 text-white font-bold py-4 px-6 rounded-2xl text-base md:text-lg transition-all shadow-lg shadow-teal-500/30"
-          >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 2.2 }} className="flex flex-col gap-3">
+          <button onClick={() => onSelect("find")} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-4 rounded-2xl active:scale-[0.98] transition-all shadow-xl shadow-slate-900/20 text-lg">
             📦 شتێکم دۆزیوەتەوە
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.03, boxShadow: "0 8px 25px rgba(59, 130, 246, 0.3)" }}
-            whileTap={{ scale: 0.97 }}
-            onClick={() => onSelect("lost")}
-            className="flex-1 bg-white border-2 border-cyan-200 text-cyan-700 font-bold py-4 px-6 rounded-2xl text-base md:text-lg transition-all hover:bg-cyan-50"
-          >
+          </button>
+          <button onClick={() => onSelect("lost")} className="w-full bg-white hover:bg-slate-50 text-slate-800 font-bold py-4 rounded-2xl active:scale-[0.98] transition-all shadow-lg border border-slate-100 text-lg">
             🔎 شتێکم ونکردوە
-          </motion.button>
+          </button>
         </motion.div>
       </motion.div>
     </div>
   );
 }
 
-// --- Main Component ---
+// --- Main App Component ---
 export default function Home() {
   const [items, setItems] = useState([]);
-  const [mode, setMode] = useState(null);
+  const [mode, setMode] = useState(null); 
   const [showForm, setShowForm] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  
   const [searchCategory, setSearchCategory] = useState("");
   const [searchCities, setSearchCities] = useState([]);
   const [lightbox, setLightbox] = useState(null);
   const [success, setSuccess] = useState(false);
-  const [showAI, setShowAI] = useState(false);
-  const [filteredItems, setFilteredItems] = useState([]);
-  
-  // --- Auth State ---
   const [user, setUser] = useState(null);
 
-  // Auth Listener
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
-    return unsub; // Clean up listener on unmount
+    return onAuthStateChanged(auth, setUser);
   }, []);
 
   const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login failed", error);
-    }
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); } 
+    catch (error) { console.error("Login failed", error); }
   };
 
-  // Items Listener
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "items"), (snap) => {
+    const q = query(collection(db, "items"), orderBy("createdAt", "desc"), limit(60));
+    const unsub = onSnapshot(q, (snap) => {
       setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
     return unsub;
@@ -1031,299 +515,161 @@ export default function Home() {
   const toggleCity = (city) =>
     setSearchCities((p) => p.includes(city) ? p.filter((c) => c !== city) : [...p, city]);
 
-  const handleAIFilter = (filteredItems) => {
-    setFilteredItems(filteredItems);
-    setSearchCategory("");
-    setSearchCities([]);
-  };
+  let baseItems = items;
+  if (mode === "my_posts" && user) {
+    baseItems = items.filter(it => it.ownerId === user.uid);
+  }
 
-  const displayedItems = filteredItems.length > 0
-    ? filteredItems
-    : items.filter(
-        (it) => (!searchCategory || it.category === searchCategory) &&
-                (searchCities.length === 0 || searchCities.includes(it.city))
-      );
+  const displayedItems = baseItems.filter(
+    (it) => (!searchCategory || it.category === searchCategory) &&
+            (searchCities.length === 0 || searchCities.includes(it.city))
+  );
+
+  const handleEdit = (item) => {
+    setEditingItem(item);
+    setMode("find");
+    setShowForm(true);
+  };
 
   if (!mode) return <Splash onSelect={setMode} />;
 
   return (
-    <div
-      className="min-h-screen py-4 md:py-6"
-      dir="rtl"
-      style={{ background: "#f8fafc", fontFamily: "'NRT', sans-serif" }}
-    >
-      <div className="w-full md:w-[80%] max-w-6xl mx-auto px-2 md:px-0">
+    <div className="min-h-screen bg-slate-50" dir="rtl" style={{ fontFamily: "'NRT', sans-serif" }}>
+      <div className="w-full max-w-7xl mx-auto pb-20">
         
-        {/* Header - Updated with Login/Logout logic */}
-        <header className="sticky top-4 z-40 mb-4 md:mb-6">
-          <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-lg border border-gray-100 p-3 md:p-4">
-            <div className="flex items-center justify-between">
-              
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => { setMode(null); setShowForm(false); setFilteredItems([]); }}
-                  className="text-xl md:text-2xl font-black text-gray-900 tracking-tight hover:text-teal-600 transition-colors"
-                >
-                  دۆزین
-                </button>
-
-                {/* Login Status & Buttons */}
-                {user ? (
-                  <button 
-                    onClick={() => signOut(auth)}
-                    className="text-xs font-medium text-gray-500 hover:text-red-500 transition-colors px-2 py-1"
-                  >
-                    چوونە دەرەوە
-                  </button>
-                ) : (
-                  <button 
-                    onClick={handleLogin}
-                    className="flex items-center gap-1.5 text-xs font-bold bg-teal-50 text-teal-600 px-3 py-1.5 rounded-full hover:bg-teal-100 transition-colors"
-                  >
-                    <FaGoogle size={10} /> چوونە ژوورەوە
-                  </button>
-                )}
-              </div>
-
-              <div className="flex gap-1.5 md:gap-2">
-                <button
-                  onClick={() => {
-                    setMode("find");
-                    setShowForm(false);
-                    setFilteredItems([]);
-                  }}
-                  className={`px-3 py-1 rounded-full text-xs md:text-sm font-bold transition-all duration-300 ${
-                    mode === "find"
-                      ? "bg-teal-500 text-white shadow-lg shadow-teal-500/30"
-                      : "bg-white text-gray-600 border-2 border-teal-200 hover:border-teal-400 hover:bg-teal-50"
-                  }`}
-                >
-                  📦 شتێکم دۆزیوەتەوە
-                </button>
-                <button
-                  onClick={() => {
-                    setMode("lost");
-                    setShowForm(false);
-                    setFilteredItems([]);
-                  }}
-                  className={`px-3 py-1 rounded-full text-xs md:text-sm font-bold transition-all duration-300 ${
-                    mode === "lost"
-                      ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/30"
-                      : "bg-white text-gray-600 border-2 border-cyan-200 hover:border-cyan-400 hover:bg-cyan-50"
-                  }`}
-                >
-                  🔎 شتێکم ونکردوە
-                </button>
-              </div>
+        {/* Top App Bar */}
+        <header className="bg-white/80 backdrop-blur-xl border-b border-slate-100 sticky top-0 z-40 px-4 py-3 md:py-4 flex justify-between items-center">
+          <button onClick={() => { setMode(null); setShowForm(false); setEditingItem(null); }} className="text-2xl md:text-3xl font-black text-slate-800 tracking-tighter">
+            دۆزین
+          </button>
+          
+          {user ? (
+            <div className="flex items-center gap-2 md:gap-4">
+              <button 
+                onClick={() => { setMode("my_posts"); setShowForm(false); setEditingItem(null); }}
+                className={`px-3 py-1.5 md:px-4 md:py-2 rounded-full text-xs md:text-sm font-bold transition-all ${mode === "my_posts" ? "bg-teal-500 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+              >
+                <FaUser className="inline ml-1" /> پۆستەکانم
+              </button>
+              <button onClick={() => { signOut(auth); setMode("lost"); }} className="p-2 text-slate-400 hover:text-red-500 text-sm md:text-base font-medium">
+                چوونە دەرەوە
+              </button>
             </div>
-          </div>
+          ) : (
+            <button onClick={handleLogin} className="flex items-center gap-2 text-sm font-bold bg-slate-900 hover:bg-slate-800 text-white px-4 md:px-6 py-2 md:py-2.5 rounded-full shadow-md active:scale-95 transition-all">
+              <FaGoogle size={14} /> چوونە ژوورەوە
+            </button>
+          )}
         </header>
 
-        <main className="space-y-4 md:space-y-6">
-          {/* Post new item */}
+        {/* Floating Action Tabs */}
+        <div className="px-4 py-4 sticky top-[60px] md:top-[72px] z-30 bg-slate-50/95 backdrop-blur-md">
+          <div className="flex max-w-sm mx-auto bg-slate-200/50 p-1 rounded-2xl">
+            <button
+              onClick={() => { setMode("find"); setShowForm(false); setEditingItem(null); }}
+              className={`flex-1 py-2.5 rounded-xl text-sm md:text-base font-bold transition-all ${mode === "find" ? "bg-white text-teal-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              دۆزیوەتەوە
+            </button>
+            <button
+              onClick={() => { setMode("lost"); setShowForm(false); setEditingItem(null); }}
+              className={`flex-1 py-2.5 rounded-xl text-sm md:text-base font-bold transition-all ${mode === "lost" ? "bg-white text-cyan-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              ونبووەکان
+            </button>
+          </div>
+        </div>
+
+        <main className="px-4 space-y-6">
+          
+          {/* Form Container */}
           {mode === "find" && (
-            <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-lg border border-gray-100 overflow-hidden">
-              <AnimatePresence mode="wait">
-                {showForm ? (
-                  <motion.div
-                    key="form"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="p-4 md:p-6"
-                  >
-                    <h2 className="text-lg md:text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-                      <FaPlus className="text-teal-500" /> تۆمارکردنی شتێکی دۆزراوە
-                    </h2>
-                    <PostForm
-                      onDone={() => {
-                        setShowForm(false);
-                        setSuccess(true);
-                        setTimeout(() => setSuccess(false), 4000);
-                      }}
-                      onCancel={() => setShowForm(false)}
-                    />
-                  </motion.div>
-                ) : (
-                  <motion.button
-                    key="cta"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    onClick={() => {
-                      // Require Login to open the post form
-                      if (user) {
-                        setShowForm(true);
-                      } else {
-                        // Prompt login first
-                        handleLogin();
-                      }
-                    }}
-                    className="w-full flex items-center justify-center gap-2 py-4 md:py-5 text-teal-600 font-semibold text-base md:text-lg transition-all hover:bg-teal-50"
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                  >
-                    <FaPlus size={16} /> {user ? "تۆمارکردنی شتێکی دۆزراوە" : "چوونە ژوورەوە بۆ تۆمارکردن"}
-                  </motion.button>
-                )}
-              </AnimatePresence>
+            <div className="max-w-3xl mx-auto mb-8">
+              <div className="bg-white rounded-[2rem] shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
+                <AnimatePresence mode="wait">
+                  {showForm ? (
+                    <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="p-5 md:p-8">
+                      <h2 className="text-xl md:text-2xl font-black text-slate-800 mb-6 flex items-center gap-3">
+                        {editingItem ? <FaEdit className="text-teal-500" size={24} /> : <div className="w-10 h-10 rounded-full bg-teal-100 flex items-center justify-center text-teal-600"><FaPlus size={14} /></div>} 
+                        {editingItem ? "دەستکاریکردنی پۆست" : "تۆمارکردنی شتی نوێ"}
+                      </h2>
+                      <PostForm editItem={editingItem} onCancel={() => { setShowForm(false); setEditingItem(null); }} onDone={() => { setShowForm(false); setEditingItem(null); setSuccess(true); setTimeout(() => setSuccess(false), 3000); }} />
+                    </motion.div>
+                  ) : (
+                    <motion.button
+                      key="cta" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                      onClick={() => { user ? setShowForm(true) : handleLogin(); }}
+                      className="w-full flex items-center justify-center gap-3 py-8 text-teal-600 font-bold text-lg md:text-xl active:bg-teal-50 hover:bg-slate-50 transition-colors"
+                    >
+                      <div className="w-12 h-12 rounded-full bg-teal-100 flex items-center justify-center"><FaPlus size={20} /></div>
+                      {user ? "زیادکردنی شتی نوێ" : "چوونە ژوورەوە بۆ زیادکردن"}
+                    </motion.button>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           )}
 
-          {/* Success toast */}
+          {/* Success Toast */}
           <AnimatePresence>
             {success && (
-              <motion.div
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full font-bold bg-teal-500 text-white shadow-lg text-sm"
-              >
-                <FaCheck size={14} /> بە سەرکەوتوویی تۆمار کرا!
+              <motion.div initial={{ opacity: 0, y: 50, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.9 }} className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-5 py-3 rounded-full font-bold bg-slate-900 text-white shadow-2xl text-sm md:text-base">
+                <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white"><FaCheck size={10} /></div>
+                سەرکەوتوو بوو!
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Filters - only in lost mode */}
-          {mode === "lost" && (
-            <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-lg border border-gray-100 p-4 md:p-6 space-y-4">
+          {/* Filters */}
+          {(mode === "lost" || mode === "my_posts") && (
+            <div className="space-y-4 pt-2">
+              {mode === "my_posts" && <h3 className="text-xl md:text-2xl font-black text-slate-800 px-1 mb-4">پۆستەکانم</h3>}
+              
               <div>
-                <p className="font-bold text-base md:text-lg text-gray-900 mb-2 flex items-center gap-2">
-                  <FaSearch className="text-teal-500" /> جۆری شت
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  <FilterBadge active={!searchCategory} onClick={() => setSearchCategory("")}>
-                    ھەموو
-                  </FilterBadge>
+                <div className="flex overflow-x-auto md:flex-wrap md:justify-center gap-2 pb-2 px-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                  <FilterBadge active={!searchCategory} onClick={() => setSearchCategory("")}>ھەموو</FilterBadge>
                   {categories.map((c) => (
-                    <FilterBadge
-                      key={c.value}
-                      active={searchCategory === c.value}
-                      onClick={() => setSearchCategory(c.value)}
-                    >
+                    <FilterBadge key={c.value} active={searchCategory === c.value} onClick={() => setSearchCategory(c.value)}>
                       {c.emoji} {c.label}
                     </FilterBadge>
                   ))}
                 </div>
               </div>
 
-              <div className="border-t border-gray-100" />
-
               <div>
-                <p className="font-bold text-base md:text-lg text-gray-900 mb-2">شار</p>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex overflow-x-auto md:flex-wrap md:justify-center gap-2 pb-2 px-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
                   {cities.map((city) => (
-                    <FilterBadge
-                      key={city}
-                      active={searchCities.includes(city)}
-                      onClick={() => toggleCity(city)}
-                    >
-                      {city}
-                    </FilterBadge>
+                    <FilterBadge key={city} active={searchCities.includes(city)} onClick={() => toggleCity(city)}>{city}</FilterBadge>
                   ))}
                 </div>
               </div>
-
-              {/* Active filters */}
-              {(searchCategory || searchCities.length > 0 || filteredItems.length > 0) && (
-                <div className="flex flex-wrap gap-1.5 pt-2 items-center">
-                  {filteredItems.length > 0 && (
-                    <span className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">
-                      <FaRobot size={10} /> {filteredItems.length} شت پێداکراو
-                      <button onClick={() => setFilteredItems([])}>
-                        <FaTimes size={10} className="text-cyan-500 hover:text-cyan-700" />
-                      </button>
-                    </span>
-                  )}
-                  {searchCategory && (
-                    <span className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
-                      {categoryMap[searchCategory]?.emoji} {categoryMap[searchCategory]?.label}
-                      <button onClick={() => setSearchCategory("")}>
-                        <FaTimes size={10} className="text-teal-500 hover:text-teal-700" />
-                      </button>
-                    </span>
-                  )}
-                  {searchCities.map((c) => (
-                    <span key={c} className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
-                      {c}
-                      <button onClick={() => toggleCity(c)}>
-                        <FaTimes size={10} className="text-teal-500 hover:text-teal-700" />
-                      </button>
-                    </span>
-                  ))}
-                  <button
-                    onClick={() => { setSearchCategory(""); setSearchCities([]); setFilteredItems([]); }}
-                    className="px-3 py-1 rounded-full text-xs font-medium text-red-500 hover:bg-red-50 border border-red-200 transition-colors"
-                  >
-                    پاككردنەوە
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
-          {/* Stats + AI Button */}
-          <div className="flex items-center justify-between px-1">
-            <p className="text-gray-600 font-medium text-sm md:text-base">
-              {displayedItems.length} شت {filteredItems.length > 0 ? "پێداکراو" : "دۆزرایەوە"}
-            </p>
-            {mode === "lost" && (
-              <button
-                onClick={() => setShowAI(true)}
-                className="flex items-center gap-1.5 font-bold text-teal-600 bg-teal-50 hover:bg-teal-100 px-4 py-2 rounded-full transition-all shadow-sm text-sm"
-              >
-                <FaRobot size={14} /> یارمەتی AI
-              </button>
+          {/* Items Grid */}
+          <div className="pt-4">
+            <p className="text-slate-500 font-bold text-sm md:text-base px-1 mb-4 md:mb-6">{displayedItems.length} شت دۆزرایەوە</p>
+            
+            {displayedItems.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+                {displayedItems.map((item) => (
+                  <ItemCard key={item.id} item={item} currentUser={user} onEdit={handleEdit} onImageClick={(imgs, idx) => setLightbox({ images: imgs.filter(Boolean), idx })} />
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-20">
+                <div className="w-24 h-24 mx-auto mb-4 rounded-full bg-slate-200 flex items-center justify-center text-5xl">📭</div>
+                <p className="text-slate-400 font-medium text-xl">هیچ شتێک نەدۆزرایەوە</p>
+              </div>
             )}
           </div>
 
-          {/* Items Grid */}
-          {displayedItems.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
-              {displayedItems.map((item) => (
-                <ItemCard
-                  key={item.id}
-                  item={item}
-                  currentUser={user} // Pass the currently logged-in user down to the card
-                  onImageClick={(imgs, idx) => setLightbox({ images: imgs.filter(Boolean), idx })}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-12 md:py-20">
-              <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-3 rounded-3xl bg-teal-50 flex items-center justify-center">
-                <span className="text-4xl">📭</span>
-              </div>
-              <p className="text-gray-500 text-base md:text-xl">
-                {filteredItems.length > 0 ? "ببورە نەدۆزرایەوە" : "هیچ شتێک نییە"}
-              </p>
-            </div>
-          )}
         </main>
       </div>
 
-      {/* Lightbox */}
       <AnimatePresence>
         {lightbox && lightbox.images.length > 0 && (
-          <Lightbox
-            images={lightbox.images}
-            startIndex={Math.min(lightbox.idx, lightbox.images.length - 1)}
-            onClose={() => setLightbox(null)}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* AI Panel */}
-      <AnimatePresence>
-        {showAI && (
-          <AIPanel
-            items={items}
-            onClose={() => {
-              setShowAI(false);
-              setFilteredItems([]);
-            }}
-            onFilterItems={handleAIFilter}
-          />
+          <Lightbox images={lightbox.images} startIndex={Math.min(lightbox.idx, lightbox.images.length - 1)} onClose={() => setLightbox(null)} />
         )}
       </AnimatePresence>
     </div>
